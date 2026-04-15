@@ -1,0 +1,65 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# OS Generated
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large tracking files / OpenCV outputs
+*.avi
+*.mp4
+*.png
+*.jpg
+*.jpeg
+*.bmp
+
+# Parameter / Pickle files (Optional: comment this out if you'd like to sync calibration to Git)
+*.p
+*.pkl
+*.npy
+
+# Exclude all heavy data and outputs directories but preserve the folders themselves
+data/calibration/left/*
+!data/calibration/left/.gitkeep
+data/calibration/right/*
+!data/calibration/right/.gitkeep
+
+data/test_images/*
+!data/test_images/.gitkeep
+data/models/*
+!data/models/.gitkeep
+
+outputs/calibration/process_frames/*
+!outputs/calibration/process_frames/.gitkeep
+outputs/calibration/rectified_frames/*
+!outputs/calibration/rectified_frames/.gitkeep
+
+outputs/disparity/*
+!outputs/disparity/.gitkeep
+outputs/logs/*
+!outputs/logs/.gitkeep
+
+outputs/validation/captured_frames/left/*
+!outputs/validation/captured_frames/left/.gitkeep
+outputs/validation/captured_frames/right/*
+!outputs/validation/captured_frames/right/.gitkeep
+outputs/validation/depth_logs/*
+!outputs/validation/depth_logs/.gitkeep
+outputs/validation/disparity_maps/*
+!outputs/validation/disparity_maps/.gitkeep
