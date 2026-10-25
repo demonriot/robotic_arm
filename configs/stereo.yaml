@@ -1,8 +1,8 @@
 camera:
-  left_id: 2
-  right_id: 1
-  width: 1280
-  height: 800
+  left_id: "http://10.87.132.203/capture"
+  right_id: "http://10.87.132.205/capture"
+  width: 640
+  height: 480
 
 disparity_camera:
   width: 640
@@ -12,9 +12,9 @@ calibration:
   checkerboard:
     Nx: 9
     Ny: 6
-    square_size_cm: 3.0
+    square_size_cm: 3
 
 disparity:
   min_disp: 0
-  num_disp_multiplier: 12  # Number of disparities will be 16 * multiplier = 192
+  num_disp_multiplier: 4  # Number of disparities will be 16 * multiplier = 192
   block_size: 11

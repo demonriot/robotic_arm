@@ -1,132 +1,120 @@
-import os
+
 import time
-import threading
-from datetime import datetime
+from pathlib import Path
+
 import cv2
+import numpy as np
+import requests
+import yaml
 
-# Save frames robustly inside the stereo_cam_calibration/orig_frame/ folder
-scriptDir = os.path.dirname(os.path.abspath(__file__))
-origFrameDir = os.path.join(scriptDir, 'orig_frame')
-dir_left_frame = os.path.join(origFrameDir, 'left')
-dir_right_frame = os.path.join(origFrameDir, 'right')
 
-# Ensure directories exist
-os.makedirs(dir_left_frame, exist_ok=True)
-os.makedirs(dir_right_frame, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parents[2]
+CONFIG_PATH = BASE_DIR / "configs" / "stereo.yaml"
 
-# Camera settings
-camera_l = 2
-camera_r = 1
-widthPixel = 640
-heightPixel = 480
+LEFT_DIR = BASE_DIR / "data" / "calibration" / "left"
+RIGHT_DIR = BASE_DIR / "data" / "calibration" / "right"
+PREVIEW_DIR = BASE_DIR / "outputs" / "calibration"
 
-# State variables
-capture_signal = False
-auto_capture = False
-running = True
+LEFT_DIR.mkdir(parents=True, exist_ok=True)
+RIGHT_DIR.mkdir(parents=True, exist_ok=True)
+PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
-def keyboard_listener():
-    global capture_signal, auto_capture, running
-    print("\n--- Controls ---")
-    print("Type 'a' and press 'ENTER' to toggle AUTO-CAPTURE (Takes a photo every 2 seconds).")
-    print("Press 'ENTER' to manually capture a SINGLE frame immediately (Override).")
-    print("Type 'q' and press 'ENTER' to quit early.")
-    print("----------------\n")
-    while running:
-        try:
-            val = input()
-            if val.strip().lower() == 'q':
-                running = False
-            elif val.strip().lower() == 'a':
-                auto_capture = not auto_capture
-                if auto_capture:
-                    print("\n[>>> AUTO CAPTURE STARTED: Taking a photo every 2 seconds. Move the checkerboard! <<<]\n")
-                else:
-                    print("\n[||| AUTO CAPTURE PAUSED |||]\n")
-            else:
-                capture_signal = True
-        except EOFError:
-            pass
+with open(CONFIG_PATH, "r") as f:
+    config = yaml.safe_load(f)
+
+
+def capture_image(url):
+    # Accept either /capture or /stream in the YAML file
+    base_url = url.rsplit("/", 1)[0]
+    capture_url = base_url + "/capture"
+
+    response = requests.get(capture_url, timeout=10)
+    response.raise_for_status()
+
+    image = cv2.imdecode(
+        np.frombuffer(response.content, dtype=np.uint8),
+        cv2.IMREAD_COLOR
+    )
+
+    if image is None:
+        raise RuntimeError(f"Invalid image from {capture_url}")
+
+    return image
+
+
+def capture_pair():
+    left_url = config["camera"]["left_id"]
+    right_url = config["camera"]["right_id"]
+
+    left = capture_image(left_url)
+    right = capture_image(right_url)
+
+    if left.shape != right.shape:
+        raise ValueError(
+            f"Resolution mismatch: {left.shape} vs {right.shape}"
+        )
+
+    return left, right
+
 
 def main():
-    global capture_signal, auto_capture, running
-    img_l = cv2.VideoCapture(camera_l)
-    img_r = cv2.VideoCapture(camera_r)
-    
-    if not (img_l.isOpened() and img_r.isOpened()):
-        print("Error: Could not open one or both video streams.")
-        return
+    print("ESP32-CAM Stereo Calibration Capture")
+    print("-----------------------------------")
+    print("Press ENTER to capture a pair.")
+    print("Type 'a' to automatically capture every 3 seconds.")
+    print("Type 'q' to quit.")
 
-    # Set camera resolution
-    img_l.set(cv2.CAP_PROP_FRAME_WIDTH, widthPixel)
-    img_l.set(cv2.CAP_PROP_FRAME_HEIGHT, heightPixel)
-    img_r.set(cv2.CAP_PROP_FRAME_WIDTH, widthPixel)
-    img_r.set(cv2.CAP_PROP_FRAME_HEIGHT, heightPixel)
+    auto_mode = False
 
-    print(f"Resolution of left camera: ({int(img_l.get(cv2.CAP_PROP_FRAME_WIDTH))} x {int(img_l.get(cv2.CAP_PROP_FRAME_HEIGHT))})")
-    print(f"Resolution of right camera: ({int(img_r.get(cv2.CAP_PROP_FRAME_WIDTH))} x {int(img_r.get(cv2.CAP_PROP_FRAME_HEIGHT))})")
+    existing = sorted(LEFT_DIR.glob("pair_*.png"))
+    pair_number = len(existing) + 1
 
-    # Start keyboard listener thread
-    listener_thread = threading.Thread(target=keyboard_listener, daemon=True)
-    listener_thread.start()
+    while True:
+        command = input("\nCommand [ENTER/a/q]: ").strip().lower()
 
-    n = 1
-    last_preview_time = time.time()
-    last_auto_capture_time = time.time()
+        if command == "q":
+            break
 
-    print("Starting capture loop. Headless mode enabled.")
-    try:
-        while running:
-            # Grab frames quickly
-            img_r.grab()
-            img_l.grab()
+        if command == "a":
+            auto_mode = not auto_mode
+            print(f"Auto mode: {'ON' if auto_mode else 'OFF'}")
 
-            ret_l, frame_l = img_l.retrieve()
-            ret_r, frame_r = img_r.retrieve()
-            
-            if not ret_l or not ret_r:
-                print("Error: Failed to retrieve frame from one or both cameras.")
-                running = False
-                break
+        if auto_mode:
+            print("Capturing automatically. Press Ctrl+C to stop.")
 
-            current_time = time.time()
+        try:
+            while True:
+                left, right = capture_pair()
 
-            # Handle capture signal from user or auto interval
-            if capture_signal or (auto_capture and current_time - last_auto_capture_time >= 2.0):
-                frame_name_l = os.path.join(dir_left_frame, f'frame{n}_l.jpg')
-                frame_name_r = os.path.join(dir_right_frame, f'frame{n}_r.jpg')
-                cv2.imwrite(frame_name_l, frame_l)
-                cv2.imwrite(frame_name_r, frame_r)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Captured synchronized pair #{n} of 32")
-                
-                n += 1
-                capture_signal = False
-                last_auto_capture_time = current_time
-                
-                if n > 32:
-                    print("\nMaximum of 32 images reached. Automatically finishing capture session!")
-                    running = False
+                filename = f"pair_{pair_number:03d}.png"
+
+                cv2.imwrite(str(LEFT_DIR / filename), left)
+                cv2.imwrite(str(RIGHT_DIR / filename), right)
+
+                preview = cv2.hconcat([left, right])
+                cv2.imwrite(
+                    str(PREVIEW_DIR / "capture_preview.jpg"),
+                    preview
+                )
+
+                print(f"Saved stereo pair #{pair_number}")
+                pair_number += 1
+
+                if not auto_mode:
                     break
-                
-            # Periodically write a preview file to disk (headless preview) - every 1 second
-            if current_time - last_preview_time > 1.0:
-                h, w = frame_l.shape[:2]
-                resized_r = cv2.resize(frame_r, (w, h))
-                preview = cv2.hconcat([frame_l, resized_r])
-                previewPath = os.path.join(scriptDir, 'preview_calibration.jpg')
-                cv2.imwrite(previewPath, preview)
-                last_preview_time = current_time
-                
-            time.sleep(0.05)
-            
-    except KeyboardInterrupt:
-        print("\nKeyboard interrupt received...")
-        running = False
 
-    finally:
-        img_l.release()
-        img_r.release()
-        print("Cameras released. Exiting.")
+                time.sleep(3)
+
+        except KeyboardInterrupt:
+            auto_mode = False
+            print("\nAuto capture stopped.")
+
+        except Exception as e:
+            auto_mode = False
+            print(f"Capture error: {e}")
+
+    print("Capture session finished.")
+
 
 if __name__ == "__main__":
     main()

@@ -1,129 +1,373 @@
-import numpy as np
-import time
-import cv2
-import pickle
-import yaml
+
 from pathlib import Path
+import pickle
 
-def main():
-    # Setup Paths
-    script_dir = Path(__file__).resolve().parent
-    base_dir = script_dir.parent.parent
-    calibration_dir = base_dir / 'data' / 'calibration' / 'params'
-    stereo_remap_path = calibration_dir / 'stereoRemap.p'
-    
-    config_path = base_dir / 'configs' / 'stereo.yaml'
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
+import cv2
+import numpy as np
+import requests
+import yaml
 
-    # Load Remap Data
-    try:
-        with open(stereo_remap_path, 'rb') as f:
-            stereoRemap = pickle.load(f)
-    except Exception as e:
-        print(f"Error loading {stereo_remap_path}: {e}")
-        print("Please ensure you have generated the calibration parameters first!")
-        return
 
-    mapxL = stereoRemap['mapxL']
-    mapyL = stereoRemap['mapyL']
-    mapxR = stereoRemap['mapxR']
-    mapyR = stereoRemap['mapyR']
+# ==========================================
+# PROJECT CONFIGURATION
+# ==========================================
 
-    # Setup Cameras
-    camera_l_id = config['camera']['left_id']
-    camera_r_id = config['camera']['right_id']
-    widthPixel = config['disparity_camera']['width']
-    heightPixel = config['disparity_camera']['height']
+ROOT = Path(__file__).resolve().parents[2]
 
-    img_l = cv2.VideoCapture(camera_l_id)
-    img_r = cv2.VideoCapture(camera_r_id)
+CONFIG_PATH = ROOT / "configs" / "stereo.yaml"
+PARAMS_DIR = ROOT / "data" / "calibration" / "params"
+OUTPUT_DIR = ROOT / "outputs" / "disparity"
 
-    if not (img_l.isOpened() and img_r.isOpened()):
-        print("Error: Could not open one or both video streams.")
-        return
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    img_l.set(cv2.CAP_PROP_FRAME_WIDTH, widthPixel)
-    img_l.set(cv2.CAP_PROP_FRAME_HEIGHT, heightPixel)
-    img_r.set(cv2.CAP_PROP_FRAME_WIDTH, widthPixel)
-    img_r.set(cv2.CAP_PROP_FRAME_HEIGHT, heightPixel)
+with open(CONFIG_PATH, "r") as f:
+    config = yaml.safe_load(f)
 
-    # Disparity Param Setup for StereoSGBM (Much higher quality than basic StereoBM)
-    min_disp = config['disparity']['min_disp']
-    num_disp = config['disparity']['num_disp_multiplier']
-    block_size = config['disparity']['block_size']
+LEFT_URL = config["camera"]["left_id"]
+RIGHT_URL = config["camera"]["right_id"]
 
-    stereo = cv2.StereoSGBM_create(
-        minDisparity=min_disp,
-        numDisparities=16 * num_disp,
-        blockSize=block_size,
-        P1=8 * 3 * block_size ** 2,
-        P2=32 * 3 * block_size ** 2,
-        disp12MaxDiff=1,
-        uniquenessRatio=10,
-        speckleWindowSize=100,
-        speckleRange=32
+# StereoSGBM settings for 320x240 images
+MIN_DISPARITY = 0
+NUM_DISPARITIES = 64  # Must be divisible by 16
+BLOCK_SIZE = 5
+
+
+# ==========================================
+# LOAD CALIBRATION PARAMETERS
+# ==========================================
+
+def load_calibration():
+    with open(PARAMS_DIR / "stereoRemap.p", "rb") as f:
+        remap = pickle.load(f)
+
+    with open(PARAMS_DIR / "disp2depth.p", "rb") as f:
+        depth_params = pickle.load(f)
+
+    maps = (
+        remap["Left_Stereo_Map_x"],
+        remap["Left_Stereo_Map_y"],
+        remap["Right_Stereo_Map_x"],
+        remap["Right_Stereo_Map_y"],
     )
 
-    print("\nCameras initialized and calibration loaded.")
-    print("Running live disparity map calculation headlessly.")
-    print("Continuously updating 'disparity_preview.jpg' at maximum stable framerate.")
-    print("Press Ctrl+C to quit.\n")
+    Q = depth_params["Q"]
 
-    try:
-        while True:
-            # Grab frames quickly to sync
-            img_r.grab()
-            img_l.grab()
+    return maps, Q
 
-            ret_l, frame_l = img_l.retrieve()
-            ret_r, frame_r = img_r.retrieve()
 
-            if not ret_l or not ret_r:
-                print("Failed to capture frame from webcam.")
-                break
+# ==========================================
+# CAPTURE IMAGES FROM ESP32-CAMS
+# ==========================================
 
-            # 1. Image Rectification
-            # Applies the math rules calculated earlier to artificially straighten the lenses
-            dstL = cv2.remap(frame_l, mapxL, mapyL, cv2.INTER_LINEAR)
-            dstR = cv2.remap(frame_r, mapxR, mapyR, cv2.INTER_LINEAR)
+def capture_image(url):
+    # Accept /capture or /stream in stereo.yaml
+    base_url = url.rsplit("/", 1)[0]
+    capture_url = base_url + "/capture"
 
-            # 2. Grayscale Conversion
-            gray_l = cv2.cvtColor(dstL, cv2.COLOR_BGR2GRAY)
-            gray_r = cv2.cvtColor(dstR, cv2.COLOR_BGR2GRAY)
+    response = requests.get(capture_url, timeout=10)
+    response.raise_for_status()
 
-            # 3. Compute Disparity
-            # Calculates the distance shifted across X-axis between left and right pixels
-            disparity = stereo.compute(gray_l, gray_r).astype(np.float32) / 16.0
+    data = np.frombuffer(
+        response.content,
+        dtype=np.uint8
+    )
 
-            # 4. Normalize for Visualization
-            # Scale 0 to maximum disparity into a raw 0-255 image profile
-            disp_vis = (disparity - min_disp) / (16 * num_disp) * 255.0
-            disp_vis = np.clip(disp_vis, 0, 255).astype(np.uint8)
+    image = cv2.imdecode(
+        data,
+        cv2.IMREAD_COLOR
+    )
 
-            # 5. Apply Jet Colormap (Blue = far away, Red = close)
-            disp_color = cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
-            
-            # Combine Rectified Original Left image with Disparity Map side-by-side
-            preview = cv2.hconcat([dstL, disp_color])
+    if image is None:
+        raise RuntimeError(
+            f"Could not decode image from {capture_url}"
+        )
 
-            # Output Headlessly
-            out_path = base_dir / 'outputs' / 'disparity' / 'disparity_preview.jpg'
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(out_path), preview)
-            
-            print(f"[{time.strftime('%H:%M:%S')}] Active High-FPS Disparity Tracking...")
+    return image
 
-            # Sleep slightly to prevent hard drive saturation from instantly writing high-res images
-            time.sleep(0.06)
 
-    except KeyboardInterrupt:
-        print("\nKeyboard interrupt received... Stopping.")
+def capture_stereo_pair():
+    print("Capturing left image...")
+    left = capture_image(LEFT_URL)
 
-    finally:
-        img_l.release()
-        img_r.release()
-        print("Cameras released. Exiting.")
+    print("Capturing right image...")
+    right = capture_image(RIGHT_URL)
 
-if __name__ == '__main__':
+    if left.shape != right.shape:
+        raise RuntimeError(
+            "Left and right image dimensions differ."
+        )
+
+    cv2.imwrite(
+        str(OUTPUT_DIR / "raw_left.png"),
+        left
+    )
+
+    cv2.imwrite(
+        str(OUTPUT_DIR / "raw_right.png"),
+        right
+    )
+
+    return left, right
+
+
+# ==========================================
+# RECTIFICATION
+# ==========================================
+
+def rectify_pair(left, right, maps):
+    mapxL, mapyL, mapxR, mapyR = maps
+
+    expected = mapxL.shape[:2]
+
+    if (
+        left.shape[:2] != expected
+        or right.shape[:2] != expected
+    ):
+        raise RuntimeError(
+            f"Image resolution does not match calibration: "
+            f"expected {expected}, "
+            f"got {left.shape[:2]}"
+        )
+
+    rect_left = cv2.remap(
+        left, mapxL, mapyL, cv2.INTER_LINEAR
+    )
+
+    rect_right = cv2.remap(
+        right, mapxR, mapyR, cv2.INTER_LINEAR
+    )
+
+    cv2.imwrite(
+        str(OUTPUT_DIR / "rect_left.png"),
+        rect_left
+    )
+
+    cv2.imwrite(
+        str(OUTPUT_DIR / "rect_right.png"),
+        rect_right
+    )
+
+    return rect_left, rect_right
+
+
+# ==========================================
+# STEREO DISPARITY
+# ==========================================
+
+def compute_disparity(left, right):
+    gray_left = cv2.cvtColor(
+        left, cv2.COLOR_BGR2GRAY
+    )
+
+    gray_right = cv2.cvtColor(
+        right, cv2.COLOR_BGR2GRAY
+    )
+
+    channels = 1
+
+    stereo = cv2.StereoSGBM_create(
+        minDisparity=MIN_DISPARITY,
+        numDisparities=NUM_DISPARITIES,
+        blockSize=BLOCK_SIZE,
+        P1=8 * channels * BLOCK_SIZE ** 2,
+        P2=32 * channels * BLOCK_SIZE ** 2,
+        disp12MaxDiff=1,
+        uniquenessRatio=8,
+        speckleWindowSize=50,
+        speckleRange=2,
+        preFilterCap=31,
+        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
+    )
+
+    # OpenCV returns disparity scaled by 16
+    disparity = stereo.compute(
+        gray_left,
+        gray_right
+    ).astype(np.float32) / 16.0
+
+    return disparity
+
+
+# ==========================================
+# VISUALIZATION
+# ==========================================
+
+def create_disparity_preview(disparity):
+    valid = (
+        np.isfinite(disparity)
+        & (disparity > MIN_DISPARITY)
+    )
+
+    normalized = np.zeros(
+        disparity.shape,
+        dtype=np.uint8
+    )
+
+    if np.any(valid):
+        values = disparity[valid]
+
+        low = np.percentile(values, 2)
+        high = np.percentile(values, 98)
+
+        if high > low:
+            normalized[valid] = np.clip(
+                (values - low) * 255.0 / (high - low),
+                0,
+                255
+            ).astype(np.uint8)
+
+    colored = cv2.applyColorMap(
+        normalized,
+        cv2.COLORMAP_JET
+    )
+
+    colored[~valid] = (0, 0, 0)
+
+    return colored, valid
+
+
+# ==========================================
+# MAIN
+# ==========================================
+
+def main():
+    print("\n===================================")
+    print("ESP32-CAM STEREO DEPTH TEST")
+    print("===================================")
+
+    maps, Q = load_calibration()
+
+    left, right = capture_stereo_pair()
+
+    rect_left, rect_right = rectify_pair(
+        left, right, maps
+    )
+
+    # ==========================================
+    # RECTIFICATION ALIGNMENT CHECK
+    # ==========================================
+
+    comparison = np.hstack((
+        rect_left.copy(),
+        rect_right.copy()
+    ))
+
+    for y in range(0, comparison.shape[0], 20):
+        cv2.line(
+            comparison,
+            (0, y),
+            (comparison.shape[1] - 1, y),
+            (0, 255, 0),
+            1
+        )
+
+    cv2.imwrite(
+        str(OUTPUT_DIR / "rectification_check.png"),
+        comparison
+    )
+
+    disparity = compute_disparity(
+        rect_left, rect_right
+    )
+
+    np.save(
+        OUTPUT_DIR / "disparity.npy",
+        disparity
+    )
+
+    preview, valid = create_disparity_preview(
+        disparity
+    )
+
+    cv2.imwrite(
+        str(OUTPUT_DIR / "disparity_preview.png"),
+        preview
+    )
+
+    # Q converts rectified image coordinates
+    # and disparity into 3D coordinates.
+    points_3d = cv2.reprojectImageTo3D(
+        disparity,
+        Q
+    )
+
+    print("\nValid disparity pixels:",
+          int(np.count_nonzero(valid)))
+
+    print("Total pixels:", disparity.size)
+
+    print("\nClick a point on the LEFT image")
+    print("to estimate its 3D coordinates.")
+    print("Press any key to exit.")
+
+    display = rect_left.copy()
+
+    def on_mouse(event, x, y, flags, userdata):
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+
+        if not valid[y, x]:
+            print(
+                f"({x}, {y}): No valid disparity"
+            )
+            return
+
+        X, Y, Z = points_3d[y, x]
+
+        if not np.all(np.isfinite([X, Y, Z])):
+            print("Invalid 3D coordinates")
+            return
+
+        print(
+            f"Pixel ({x}, {y}) | "
+            f"Disparity: {disparity[y, x]:.2f} px | "
+            f"X: {X:.2f} cm | "
+            f"Y: {Y:.2f} cm | "
+            f"Z: {Z:.2f} cm"
+        )
+
+        annotated = display.copy()
+
+        cv2.circle(
+            annotated,
+            (x, y),
+            4,
+            (0, 255, 0),
+            -1
+        )
+
+        cv2.imshow(
+            "Rectified Left - Click for Depth",
+            annotated
+        )
+
+    cv2.namedWindow(
+        "Rectified Left - Click for Depth"
+    )
+
+    cv2.setMouseCallback(
+        "Rectified Left - Click for Depth",
+        on_mouse
+    )
+
+    cv2.imshow(
+        "Rectified Left - Click for Depth",
+        display
+    )
+
+    cv2.imshow(
+        "Rectified Right",
+        rect_right
+    )
+
+    cv2.imshow(
+        "Disparity",
+        preview
+    )
+
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
     main()
