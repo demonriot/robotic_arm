@@ -1,6 +1,8 @@
+```mermaid
 graph LR
     %% Root node
-    Root("Egg_Robot/") style Root fill:#f9f,stroke:#333,stroke-width:2px;
+    Root("Egg_Robot/")
+    style Root fill:#f9f,stroke:#333,stroke-width:2px;
 
     %% Base directories and root files
     Root --> configs("configs/")
@@ -64,3 +66,4 @@ graph LR
     sr_ste --> sr_s_cal("calibrate_stereo.py")
     sr_ste --> sr_s_dis("disparity.py")
     sr_ste --> sr_s_rec("rectify.py")
+```
