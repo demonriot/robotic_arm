@@ -63,3 +63,7 @@ outputs/validation/depth_logs/*
 !outputs/validation/depth_logs/.gitkeep
 outputs/validation/disparity_maps/*
 !outputs/validation/disparity_maps/.gitkeep
+
+
+
+docs/

@@ -1,6 +1,7 @@
 
-import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import time
 
 import cv2
 import numpy as np
@@ -8,112 +9,374 @@ import requests
 import yaml
 
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-CONFIG_PATH = BASE_DIR / "configs" / "stereo.yaml"
+# ==========================================
+# PROJECT PATHS
+# ==========================================
 
-LEFT_DIR = BASE_DIR / "data" / "calibration" / "left"
-RIGHT_DIR = BASE_DIR / "data" / "calibration" / "right"
-PREVIEW_DIR = BASE_DIR / "outputs" / "calibration"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+CONFIG_PATH = PROJECT_ROOT / "configs" / "stereo.yaml"
+
+LEFT_DIR = PROJECT_ROOT / "data" / "calibration" / "left"
+RIGHT_DIR = PROJECT_ROOT / "data" / "calibration" / "right"
 
 LEFT_DIR.mkdir(parents=True, exist_ok=True)
 RIGHT_DIR.mkdir(parents=True, exist_ok=True)
-PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
-with open(CONFIG_PATH, "r") as f:
+
+# ==========================================
+# SETTINGS
+# ==========================================
+
+REQUEST_TIMEOUT = 10
+PREVIEW_WIDTH = 1200
+
+WINDOW_NAME = "Stereo Calibration - Live Preview"
+
+# ==========================================
+# LOAD CONFIG
+# ==========================================
+
+with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
+LEFT_URL = config["camera"]["left_id"]
+RIGHT_URL = config["camera"]["right_id"]
 
-def capture_image(url):
-    # Accept either /capture or /stream in the YAML file
-    base_url = url.rsplit("/", 1)[0]
-    capture_url = base_url + "/capture"
+EXPECTED_WIDTH = int(config["camera"]["width"])
+EXPECTED_HEIGHT = int(config["camera"]["height"])
 
-    response = requests.get(capture_url, timeout=10)
+
+# ==========================================
+# CAPTURE HELPERS
+# ==========================================
+
+def fetch_image(url):
+    response = requests.get(
+        url,
+        timeout=REQUEST_TIMEOUT,
+        headers={"Cache-Control": "no-cache"},
+    )
+
     response.raise_for_status()
 
+    image_array = np.frombuffer(
+        response.content,
+        dtype=np.uint8,
+    )
+
     image = cv2.imdecode(
-        np.frombuffer(response.content, dtype=np.uint8),
-        cv2.IMREAD_COLOR
+        image_array,
+        cv2.IMREAD_COLOR,
     )
 
     if image is None:
-        raise RuntimeError(f"Invalid image from {capture_url}")
+        raise RuntimeError(
+            f"Failed to decode image from {url}"
+        )
+
+    if image.shape[:2] != (
+        EXPECTED_HEIGHT,
+        EXPECTED_WIDTH,
+    ):
+        raise RuntimeError(
+            f"Unexpected image size: "
+            f"{image.shape[1]}x{image.shape[0]}"
+        )
 
     return image
 
 
-def capture_pair():
-    left_url = config["camera"]["left_id"]
-    right_url = config["camera"]["right_id"]
+def capture_pair(executor):
+    """
+    Request both ESP32 cameras concurrently.
+    """
 
-    left = capture_image(left_url)
-    right = capture_image(right_url)
+    left_future = executor.submit(
+        fetch_image,
+        LEFT_URL,
+    )
 
-    if left.shape != right.shape:
-        raise ValueError(
-            f"Resolution mismatch: {left.shape} vs {right.shape}"
+    right_future = executor.submit(
+        fetch_image,
+        RIGHT_URL,
+    )
+
+    left_img = left_future.result()
+    right_img = right_future.result()
+
+    return left_img, right_img
+
+
+# ==========================================
+# PAIR NUMBERING
+# ==========================================
+
+def next_pair_number():
+    existing = set()
+
+    for directory in (LEFT_DIR, RIGHT_DIR):
+        for path in directory.glob("pair_*.png"):
+            try:
+                number = int(
+                    path.stem.split("_")[-1]
+                )
+                existing.add(number)
+            except ValueError:
+                pass
+
+    return max(existing, default=0) + 1
+
+
+# ==========================================
+# PREVIEW
+# ==========================================
+
+def make_preview(
+    left_img,
+    right_img,
+    pair_number,
+    paused=False,
+):
+    preview = np.hstack(
+        (left_img, right_img)
+    )
+
+    scale = min(
+        1.0,
+        PREVIEW_WIDTH / preview.shape[1],
+    )
+
+    if scale < 1.0:
+        preview = cv2.resize(
+            preview,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_AREA,
         )
 
-    return left, right
+    height, width = preview.shape[:2]
 
+    # Dark header strip
+    overlay = preview.copy()
+
+    cv2.rectangle(
+        overlay,
+        (0, 0),
+        (width, 48),
+        (0, 0, 0),
+        -1,
+    )
+
+    preview = cv2.addWeighted(
+        overlay,
+        0.65,
+        preview,
+        0.35,
+        0,
+    )
+
+    status = "PAUSED" if paused else "LIVE"
+
+    text = (
+        f"{status} | Next pair: {pair_number:03d} | "
+        "SPACE/ENTER: Save | P: Pause | Q: Quit"
+    )
+
+    cv2.putText(
+        preview,
+        text,
+        (12, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    cv2.putText(
+        preview,
+        "LEFT",
+        (15, height - 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+    )
+
+    cv2.putText(
+        preview,
+        "RIGHT",
+        (width // 2 + 15, height - 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+    )
+
+    return preview
+
+
+# ==========================================
+# SAVE
+# ==========================================
+
+def save_pair(left_img, right_img, pair_number):
+    left_path = (
+        LEFT_DIR / f"pair_{pair_number:03d}.png"
+    )
+
+    right_path = (
+        RIGHT_DIR / f"pair_{pair_number:03d}.png"
+    )
+
+    if left_path.exists() or right_path.exists():
+        raise FileExistsError(
+            f"Pair {pair_number:03d} already exists."
+        )
+
+    left_ok = cv2.imwrite(
+        str(left_path),
+        left_img,
+    )
+
+    right_ok = cv2.imwrite(
+        str(right_path),
+        right_img,
+    )
+
+    if not (left_ok and right_ok):
+        # Avoid leaving behind a partial stereo pair.
+        if left_path.exists():
+            left_path.unlink()
+
+        if right_path.exists():
+            right_path.unlink()
+
+        raise RuntimeError(
+            "Failed to save stereo pair."
+        )
+
+    print(
+        f"Saved pair {pair_number:03d} "
+        f"({EXPECTED_WIDTH}x{EXPECTED_HEIGHT})"
+    )
+
+
+# ==========================================
+# MAIN
+# ==========================================
 
 def main():
-    print("ESP32-CAM Stereo Calibration Capture")
-    print("-----------------------------------")
-    print("Press ENTER to capture a pair.")
-    print("Type 'a' to automatically capture every 3 seconds.")
-    print("Type 'q' to quit.")
+    print("===================================")
+    print("LIVE STEREO CALIBRATION CAPTURE")
+    print("===================================")
 
-    auto_mode = False
+    print(f"LEFT:  {LEFT_URL}")
+    print(f"RIGHT: {RIGHT_URL}")
 
-    existing = sorted(LEFT_DIR.glob("pair_*.png"))
-    pair_number = len(existing) + 1
+    print(
+        f"Resolution: "
+        f"{EXPECTED_WIDTH}x{EXPECTED_HEIGHT}"
+    )
 
-    while True:
-        command = input("\nCommand [ENTER/a/q]: ").strip().lower()
+    print("\nControls:")
+    print("SPACE / ENTER : Capture and save")
+    print("P             : Pause/resume")
+    print("Q / ESC       : Quit")
 
-        if command == "q":
-            break
+    pair_number = next_pair_number()
 
-        if command == "a":
-            auto_mode = not auto_mode
-            print(f"Auto mode: {'ON' if auto_mode else 'OFF'}")
+    paused = False
+    last_left = None
+    last_right = None
 
-        if auto_mode:
-            print("Capturing automatically. Press Ctrl+C to stop.")
+    cv2.namedWindow(
+        WINDOW_NAME,
+        cv2.WINDOW_NORMAL,
+    )
 
+    with ThreadPoolExecutor(max_workers=2) as executor:
         try:
             while True:
-                left, right = capture_pair()
 
-                filename = f"pair_{pair_number:03d}.png"
+                if not paused:
+                    try:
+                        left_img, right_img = capture_pair(
+                            executor
+                        )
 
-                cv2.imwrite(str(LEFT_DIR / filename), left)
-                cv2.imwrite(str(RIGHT_DIR / filename), right)
+                        last_left = left_img
+                        last_right = right_img
 
-                preview = cv2.hconcat([left, right])
-                cv2.imwrite(
-                    str(PREVIEW_DIR / "capture_preview.jpg"),
-                    preview
-                )
+                    except Exception as exc:
+                        print(f"Preview error: {exc}")
 
-                print(f"Saved stereo pair #{pair_number}")
-                pair_number += 1
+                if last_left is not None:
+                    preview = make_preview(
+                        last_left,
+                        last_right,
+                        pair_number,
+                        paused,
+                    )
 
-                if not auto_mode:
+                    cv2.imshow(
+                        WINDOW_NAME,
+                        preview,
+                    )
+
+                key = cv2.waitKey(1) & 0xFF
+
+                if key in (ord("q"), 27):
                     break
 
-                time.sleep(3)
+                if key == ord("p"):
+                    paused = not paused
+                    print(
+                        "Preview paused."
+                        if paused
+                        else "Preview resumed."
+                    )
 
-        except KeyboardInterrupt:
-            auto_mode = False
-            print("\nAuto capture stopped.")
+                if key in (32, 13, 10):
+                    if last_left is None:
+                        print(
+                            "No valid camera frames yet."
+                        )
+                        continue
 
-        except Exception as e:
-            auto_mode = False
-            print(f"Capture error: {e}")
+                    # Acquire a fresh pair rather than
+                    # saving potentially stale preview
+                    # frames.
+                    try:
+                        print(
+                            f"Capturing pair "
+                            f"{pair_number:03d}..."
+                        )
 
-    print("Capture session finished.")
+                        left_img, right_img = capture_pair(
+                            executor
+                        )
+
+                        save_pair(
+                            left_img,
+                            right_img,
+                            pair_number,
+                        )
+
+                        last_left = left_img
+                        last_right = right_img
+
+                        pair_number += 1
+
+                    except Exception as exc:
+                        print(
+                            f"Capture failed: {exc}"
+                        )
+
+        finally:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
