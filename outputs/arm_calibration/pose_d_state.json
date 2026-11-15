@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-11-08T21:03:05.029+05:30",
+  "reference": {
+    "base": 90.0,
+    "shoulder": 74.11,
+    "forearm": -75.0,
+    "elbow": -149.11
+  },
+  "motor_steps": {
+    "X": 389,
+    "Y": 942,
+    "Z": -336
+  },
+  "estimated_angles": {
+    "base": 80.5500000118125,
+    "shoulder": 63.169375013675776,
+    "elbow": -122.6162500331172,
+    "forearm": -59.44687501944142
+  },
+  "predicted_xyz": [
+    2.996281534890433,
+    18.001562453277074,
+    7.999058253558901
+  ],
+  "event": "physical_measurement"
+}

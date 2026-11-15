@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-11-08T20:38:43.330+05:30",
+  "angles": {
+    "base": 72.48124999064844,
+    "shoulder": 37.996875008753904,
+    "elbow": 38.449999976937505,
+    "forearm": 76.44687498569141
+  },
+  "motor_steps": {
+    "X": 249,
+    "Y": 656,
+    "Z": 266
+  },
+  "last_event": "stopped",
+  "position_confirmed": true,
+  "note": "Open-loop estimated position"
+}

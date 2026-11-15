@@ -1,0 +1,35 @@
+{
+  "updated_at": "2026-11-08T20:25:56.194+05:30",
+  "reference": {
+    "base": 90.0,
+    "shoulder": 65.0,
+    "forearm": 65.0,
+    "elbow": 0.0,
+    "xyz": [
+      0.0,
+      18.0,
+      8.0
+    ]
+  },
+  "reference_steps": {
+    "X": 0,
+    "Y": 0,
+    "Z": 0
+  },
+  "motor_steps": {
+    "X": 700,
+    "Y": 0,
+    "Z": -800
+  },
+  "estimated_angles": {
+    "base": 67.500000028125,
+    "shoulder": 45.31250002460938,
+    "elbow": 0.0,
+    "forearm": 45.31250002460938
+  },
+  "armed": 1,
+  "busy": 0,
+  "last_event": "session_end",
+  "last_command": "quit",
+  "note": "Angles are open-loop estimates. No encoders or homing sensors."
+}

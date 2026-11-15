@@ -1,0 +1,65 @@
+{
+  "created_at": "2026-11-08T20:25:41.454+05:30",
+  "geometry_cm": {
+    "upper_arm": 12.0,
+    "forearm": 12.0,
+    "shoulder_height": 15.0,
+    "nominal_gripper_radial_offset": 6.0,
+    "nominal_gripper_vertical_offset": -5.0
+  },
+  "steps_per_degree": 35.5555556,
+  "motor_signs": {
+    "X": -1,
+    "Y": 1,
+    "Z": 1
+  },
+  "target_z_cm": 8.0,
+  "pose_a": {
+    "measurements": {
+      "base": 90.0,
+      "shoulder": 65.0,
+      "forearm": 65.0,
+      "elbow": 0.0,
+      "xyz": [
+        0.0,
+        18.0,
+        8.0
+      ]
+    },
+    "steps": {
+      "X": 0,
+      "Y": 0,
+      "Z": 0
+    }
+  },
+  "pose_b": {
+    "measurements": {
+      "base": 65.0,
+      "shoulder": 45.0,
+      "forearm": 55.0,
+      "elbow": 10.0,
+      "xyz": [
+        9.0,
+        19.0,
+        5.0
+      ]
+    },
+    "steps": {
+      "X": 700,
+      "Y": 0,
+      "Z": -800
+    },
+    "predicted_angles": {
+      "base": 67.500000028125,
+      "shoulder": 45.31250002460938,
+      "elbow": 0.0,
+      "forearm": 45.31250002460938
+    },
+    "measurement_minus_prediction_deg": {
+      "base": -2.5,
+      "shoulder": -0.313,
+      "elbow": 10.0,
+      "forearm": 9.687
+    }
+  }
+}

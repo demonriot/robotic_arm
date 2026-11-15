@@ -1,0 +1,14 @@
+camera:
+  source: "http://192.168.0.107:8080/video"
+  connection_type: "mjpeg"
+  width: 640
+  height: 480
+
+calibration:
+  checkerboard:
+    Nx: 7
+    Ny: 7
+    square_size_cm: 3.0
+
+paths:
+  capture_dir: "data/monocular/calibration"

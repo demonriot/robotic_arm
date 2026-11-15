@@ -1,0 +1,11 @@
+# Measurements in centimeters; verify against joint-axis centers before motor control.
+geometry:
+  shoulder_height_cm: 9.5
+  upper_arm_cm: 12.0
+  forearm_cm: 16.0
+  gripper_horizontal_cm: 6.0
+  gripper_down_cm: 5.0
+motors:
+  microsteps_per_motor_revolution: 3200
+  gear_ratio: 4.0
+# Joint zero positions, direction signs, limits and homing are NOT yet calibrated.

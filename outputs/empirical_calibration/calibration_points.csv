@@ -1,0 +1,2 @@
+timestamp,point,motor_x,motor_y,motor_z,gripper_x_cm,gripper_y_cm,gripper_z_cm,notes
+2026-11-15T13:35:17.510121,P0,0,0,0,-6.0,25.0,7.2,
